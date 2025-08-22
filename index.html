@@ -37,8 +37,8 @@ function init() {
 
 // 足跡を追加する関数
 function addFootprint(position, isLeft) {
-  const geom = new THREE.BoxGeometry(0.15, 0.02, 0.3);
-  const mat = new THREE.MeshBasicMaterial({ color: isLeft ? 0x00aaff : 0xff4444 });
+  const geom = new THREE.SphereGeometry(0.08, 24, 24); // 球体（ドット）
+  const mat = new THREE.MeshBasicMaterial({ color: 0xc71585 }); // 赤紫
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.copy(position);
   scene.add(mesh);
@@ -47,14 +47,17 @@ function addFootprint(position, isLeft) {
 
 function render(t, frame) {
   const refSpace = renderer.xr.getReferenceSpace();
+  let debugText = '';
   if (frame) {
     const pose = frame.getViewerPose(refSpace);
     if (pose) {
       const pos = pose.views[0].transform.position;
       const cur = new THREE.Vector3(pos.x, pos.y, pos.z);
-
+      debugText += `現在位置: x=${cur.x.toFixed(2)}, y=${cur.y.toFixed(2)}, z=${cur.z.toFixed(2)}\n`;
       if (lastPos) {
         const dist = cur.distanceTo(lastPos);
+        debugText += `前回位置: x=${lastPos.x.toFixed(2)}, y=${lastPos.y.toFixed(2)}, z=${lastPos.z.toFixed(2)}\n`;
+        debugText += `距離: ${dist.toFixed(2)}m\n`;
         if (dist > 0.25) { // 25cm動いたら足跡追加
           stepToggle = !stepToggle;
           addFootprint(cur, stepToggle);
@@ -62,9 +65,26 @@ function render(t, frame) {
         }
       } else {
         lastPos = cur.clone();
+        debugText += '初回位置登録\n';
       }
+      debugText += `足跡数: ${footprints.length}`;
     }
   }
+  let debugDiv = document.getElementById('debug-info');
+  if (!debugDiv) {
+    debugDiv = document.createElement('div');
+    debugDiv.id = 'debug-info';
+    debugDiv.style.position = 'fixed';
+    debugDiv.style.top = '10px';
+    debugDiv.style.left = '10px';
+    debugDiv.style.background = 'rgba(255,255,255,0.8)';
+    debugDiv.style.color = '#333';
+    debugDiv.style.fontSize = '16px';
+    debugDiv.style.padding = '8px';
+    debugDiv.style.zIndex = '1000';
+    document.body.appendChild(debugDiv);
+  }
+  debugDiv.innerText = debugText;
   renderer.render(scene, camera);
 }
 </script>
