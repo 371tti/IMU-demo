@@ -33,11 +33,52 @@ function init() {
   document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor'], optionalFeatures: ['local'] }));
 
   renderer.setAnimationLoop(render);
+
+  // デバッグ情報表示用div追加（初期化時に生成）
+  let debugDiv = document.getElementById('debug-info');
+  if (!debugDiv) {
+    debugDiv = document.createElement('div');
+    debugDiv.id = 'debug-info';
+    debugDiv.style.position = 'fixed';
+    debugDiv.style.top = '10px';
+    debugDiv.style.left = '10px';
+    debugDiv.style.background = 'rgba(255,255,255,0.8)';
+    debugDiv.style.color = '#333';
+    debugDiv.style.fontSize = '16px';
+    debugDiv.style.padding = '8px';
+    debugDiv.style.zIndex = '1000';
+    debugDiv.innerText = 'デバッグ情報';
+    document.body.appendChild(debugDiv);
+  }
+
+  // XR設定UI追加
+  const xrDiv = document.createElement('div');
+  xrDiv.id = 'xr-settings';
+  xrDiv.style.position = 'fixed';
+  xrDiv.style.top = '80px';
+  xrDiv.style.left = '10px';
+  xrDiv.style.background = 'rgba(230,230,255,0.9)';
+  xrDiv.style.color = '#222';
+  xrDiv.style.fontSize = '15px';
+  xrDiv.style.padding = '8px';
+  xrDiv.style.zIndex = '1000';
+  xrDiv.innerHTML = `
+    <b>XR設定</b><br>
+    <label>足跡サイズ: <input id="sizeInput" type="number" min="0.01" max="0.5" step="0.01" value="0.01" style="width:60px"></label>
+    <button id="applySize">適用</button>
+  `;
+  document.body.appendChild(xrDiv);
+
+  document.getElementById('applySize').onclick = () => {
+    const val = parseFloat(document.getElementById('sizeInput').value);
+    window.FOOTPRINT_SIZE = val;
+  };
+  window.FOOTPRINT_SIZE = 0.01;
 }
 
 // 足跡を追加する関数
 function addFootprint(position, isLeft) {
-  const geom = new THREE.SphereGeometry(0.08, 24, 24); // 球体（ドット）
+  const geom = new THREE.SphereGeometry(window.FOOTPRINT_SIZE || 0.01, 24, 24); // XR設定UIでサイズ変更可
   const mat = new THREE.MeshBasicMaterial({ color: 0xc71585 }); // 赤紫
   const mesh = new THREE.Mesh(geom, mat);
   mesh.position.copy(position);
@@ -71,20 +112,7 @@ function render(t, frame) {
     }
   }
   let debugDiv = document.getElementById('debug-info');
-  if (!debugDiv) {
-    debugDiv = document.createElement('div');
-    debugDiv.id = 'debug-info';
-    debugDiv.style.position = 'fixed';
-    debugDiv.style.top = '10px';
-    debugDiv.style.left = '10px';
-    debugDiv.style.background = 'rgba(255,255,255,0.8)';
-    debugDiv.style.color = '#333';
-    debugDiv.style.fontSize = '16px';
-    debugDiv.style.padding = '8px';
-    debugDiv.style.zIndex = '1000';
-    document.body.appendChild(debugDiv);
-  }
-  debugDiv.innerText = debugText;
+  if (debugDiv) debugDiv.innerText = debugText;
   renderer.render(scene, camera);
 }
 </script>
