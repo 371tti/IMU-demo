@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Camera + IMU Demo (VIO-ish)</title>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --ink:#e8ecff; --muted:#9aa4c7; --accent:#6da7ff; --good:#32d296; --warn:#ffdd57; --bad:#ff6b6b; }
+    * { box-sizing: border-box; }
+    html, body { height:100%; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans JP", sans-serif; background:linear-gradient(180deg,#0b1020,#0a0f24); color:var(--ink); }
+    .wrap { max-width:1200px; margin:0 auto; padding:16px; display:grid; gap:16px; grid-template-columns: 1.1fr 0.9fr; }
+    header { max-width:1200px; margin:20px auto 6px; padding:0 16px; }
+    h1 { font-size: clamp(18px,3.2vw,28px); margin:0 0 6px; letter-spacing: .2px; }
+    .subtitle { color: var(--muted); font-size: 14px; }
+
+    .card { background:linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02)); border:1px solid rgba(255,255,255,0.08); border-radius:16px; padding:14px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+    .grid { display:grid; gap:12px; }
+
+    video, canvas { width:100%; height:auto; border-radius:12px; background:#000; display:block; }
+    .panel { display:grid; gap:10px; grid-template-columns: repeat(2, minmax(0,1fr)); align-items:end; }
+    .panel button, .panel .btn { background:var(--card); border:1px solid rgba(255,255,255,0.12);
+      color:var(--ink); padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:600; }
+    .panel button:hover { border-color:var(--accent); }
+
+    .slider { display:grid; grid-template-columns: 120px 1fr auto; gap:8px; align-items:center; font-size:13px; color:var(--muted); }
+    .slider input[type="range"] { width:100%; }
+    .kv { display:grid; grid-template-columns: 1fr 1fr; gap:6px 10px; font-size:13px; color:var(--muted); }
+    .kv div { background: rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.06); padding:8px 10px; border-radius:10px; }
+    .kv b { color:var(--ink); font-weight:700; }
+
+    .note { font-size:12px; color:var(--muted); line-height:1.6; }
+    .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid rgba(255,255,255,.15); color:var(--muted); }
+
+    .status { display:flex; gap:6px; align-items:center; }
+    .dot { width:10px; height:10px; border-radius:50%; background:gray; }
+    .ok { background:var(--good); } .warn { background:var(--warn); } .bad { background:var(--bad); }
+
+    @media (max-width: 880px) {
+      .wrap { grid-template-columns: 1fr; }
+      .panel { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+  <!-- OpenCV.js for simple visual odometry (feature tracking) -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+  <header>
+    <h1>カメラ + IMU センサーフュージョン（ブラウザ簡易デモ）</h1>
+    <div class="subtitle">スマホの <b>カメラ</b> と <b>加速度/ジャイロ</b> を合わせて、<b>相対移動</b> を推定するサンプル。室内の簡易トラッキングや教育用途向け。</div>
+  </header>
+
+  <main class="wrap">
+    <!-- Left: Vision (camera) -->
+    <section class="card grid">
+      <div class="panel">
+        <button id="btnStartCam">📷 カメラ開始</button>
+        <button id="btnSensors">📡 センサー許可</button>
+      </div>
+      <div class="status">
+        <span class="badge">HTTPS or localhost が必要</span>
+        <div id="cvStatusDot" class="dot"></div>
+        <div id="cvStatusLabel" class="subtitle">OpenCV: 読み込み中...</div>
+      </div>
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </section>
+
+    <!-- Right: Controls & telemetry -->
+    <section class="card grid">
+      <div class="grid">
+        <div class="slider">
+          <label>Vision scale (m/px)</label>
+          <input id="scaleVision" type="range" min="0" max="0.05" step="0.0005" value="0.005">
+          <code id="scaleVisionVal">0.005</code>
+        </div>
+        <div class="slider">
+          <label>Fusion α (IMU↔Vision)</label>
+          <input id="alphaFusion" type="range" min="0" max="1" step="0.02" value="0.7">
+          <code id="alphaFusionVal">0.70</code>
+        </div>
+        <div class="slider">
+          <label>IMU 速度減衰</label>
+          <input id="velDamping" type="range" min="0.85" max="0.999" step="0.001" value="0.97">
+          <code id="velDampingVal">0.970</code>
+        </div>
+        <div class="slider">
+          <label>重力LPF(β)</label>
+          <input id="betaGravity" type="range" min="0.8" max="0.999" step="0.001" value="0.98">
+          <code id="betaGravityVal">0.980</code>
+        </div>
+        <div class="panel">
+          <button id="btnZero">原点リセット</button>
+          <button id="btnPause">⏸ 解析停止</button>
+        </div>
+      </div>
+
+      <canvas id="traj" width="500" height="380"></canvas>
+
+      <div class="kv">
+        <div><b>Vision 平均移動</b><br><span id="visionDxDy">dx=0, dy=0 px</span></div>
+        <div><b>Vision 累積</b><br><span id="visionSum">x=0, y=0 px</span></div>
+        <div><b>IMU 速度</b><br><span id="imuV">vx=0, vy=0 m/s</span></div>
+        <div><b>IMU 位置</b><br><span id="imuP">x=0, y=0 m</span></div>
+        <div><b>Fusion 位置</b><br><span id="fusedP">x=0, y=0 m</span></div>
+        <div><b>姿勢(近似)</b><br><span id="rpy">yaw=0°, pitch=0°, roll=0°</span></div>
+      </div>
+
+      <p class="note">
+        ⚠️ このデモは <b>教育用</b>・<b>概念実証</b> です。スケール不定・ドリフト・照明や模様依存などの制限があります。<br>
+        <b>手順:</b> ①「カメラ開始」→ ②「センサー許可」→ ③ ゆっくり平面移動してみる → スライダーで調整。<br>
+        <b>ヒント:</b> 模様が豊富で明るい場所が安定します。Vision scale はシーンの距離に応じて 0.001〜0.02 m/px 目安。
+      </p>
+    </section>
+  </main>
+
+  <script>
+    // --- DOM refs ---
+    const els = {
+      video: document.getElementById('video'),
+      overlay: document.getElementById('overlay'),
+      traj: document.getElementById('traj'),
+      btnStartCam: document.getElementById('btnStartCam'),
+      btnSensors: document.getElementById('btnSensors'),
+      btnZero: document.getElementById('btnZero'),
+      btnPause: document.getElementById('btnPause'),
+      cvDot: document.getElementById('cvStatusDot'),
+      cvLabel: document.getElementById('cvStatusLabel'),
+      scaleVision: document.getElementById('scaleVision'),
+      alphaFusion: document.getElementById('alphaFusion'),
+      velDamping: document.getElementById('velDamping'),
+      betaGravity: document.getElementById('betaGravity'),
+      sScaleVision: document.getElementById('scaleVisionVal'),
+      sAlphaFusion: document.getElementById('alphaFusionVal'),
+      sVelDamp: document.getElementById('velDampingVal'),
+      sBetaGrav: document.getElementById('betaGravityVal'),
+      textVisionDxDy: document.getElementById('visionDxDy'),
+      textVisionSum: document.getElementById('visionSum'),
+      textImuV: document.getElementById('imuV'),
+      textImuP: document.getElementById('imuP'),
+      textFusedP: document.getElementById('fusedP'),
+      textRPY: document.getElementById('rpy'),
+    };
+
+    // Show current slider values
+    const showRange = () => {
+      els.sScaleVision.textContent = (+els.scaleVision.value).toFixed(3);
+      els.sAlphaFusion.textContent = (+els.alphaFusion.value).toFixed(2);
+      els.sVelDamp.textContent = (+els.velDamping.value).toFixed(3);
+      els.sBetaGrav.textContent = (+els.betaGravity.value).toFixed(3);
+    };
+    ['input','change'].forEach(evt => {
+      els.scaleVision.addEventListener(evt, showRange);
+      els.alphaFusion.addEventListener(evt, showRange);
+      els.velDamping.addEventListener(evt, showRange);
+      els.betaGravity.addEventListener(evt, showRange);
+    });
+    showRange();
+
+    // --- State ---
+    let streaming = false, paused = false;
+    let opencvReady = false;
+    let cap = null; // cv.VideoCapture
+    let prevGray = null, prevPts = null;
+    let visionSum = {x:0, y:0};
+    let visionDxDy = {dx:0, dy:0};
+
+    // IMU integration (very naive, demo-only)
+    let gravity = {x:0, y:0, z:9.81};
+    let linAcc = {x:0, y:0, z:0};
+    let vel = {x:0, y:0, z:0};
+    let pos = {x:0, y:0, z:0};
+    let lastIMUts = null;
+
+    // Device orientation (for display only)
+    let rpy = {yaw:0, pitch:0, roll:0};
+
+    // Fusion path canvas
+    const trajCtx = els.traj.getContext('2d');
+    const W = () => els.traj.width, H = () => els.traj.height;
+
+    function clearTraj(){
+      trajCtx.fillStyle = '#0b1020';
+      trajCtx.fillRect(0,0,W(),H());
+      trajCtx.strokeStyle = 'rgba(255,255,255,0.12)';
+      for(let x=0; x<W(); x+=50){ trajCtx.beginPath(); trajCtx.moveTo(x,0); trajCtx.lineTo(x,H()); trajCtx.stroke(); }
+      for(let y=0; y<H(); y+=50){ trajCtx.beginPath(); trajCtx.moveTo(0,y); trajCtx.lineTo(W(),y); trajCtx.stroke(); }
+    }
+    clearTraj();
+
+    let traj = { imu:[], vision:[], fused:[] };
+    const pushPt = (arr, x, y) => { arr.push({x,y}); if(arr.length>1000) arr.shift(); };
+
+    function drawPath(){
+      clearTraj();
+      const cx = W()/2, cy = H()/2; // origin center
+      const draw = (points, label) => {
+        if(points.length<2) return;
+        trajCtx.beginPath();
+        trajCtx.moveTo(cx+points[0].x*20, cy+points[0].y*20);
+        for(let i=1;i<points.length;i++) trajCtx.lineTo(cx+points[i].x*20, cy+points[i].y*20);
+        trajCtx.strokeStyle = label==='fused' ? '#6da7ff' : (label==='imu' ? '#32d296' : '#ffdd57');
+        trajCtx.lineWidth = label==='fused' ? 2.5 : 1.6;
+        trajCtx.stroke();
+      };
+      draw(traj.vision,'vision');
+      draw(traj.imu,'imu');
+      draw(traj.fused,'fused');
+    }
+
+    // --- Utils ---
+    const median = arr => {
+      if(!arr.length) return 0; const a = arr.slice().sort((a,b)=>a-b); const mid = Math.floor(a.length/2); return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
+    };
+
+    function fitOverlayToVideo(){
+      const v = els.video;
+      if(!v.videoWidth) return;
+      els.overlay.width = v.videoWidth;
+      els.overlay.height = v.videoHeight;
+    }
+
+    // --- OpenCV readiness ---
+    window.Module = { onRuntimeInitialized() { opencvReady = true; els.cvDot.classList.add('ok'); els.cvLabel.textContent = 'OpenCV: 準備OK'; }};
+    const cvReadyCheck = setInterval(()=>{
+      if(typeof cv !== 'undefined' && cv.Mat){
+        clearInterval(cvReadyCheck);
+        if(cv && cv.imread){ /* no-op, Module will flip */ } else { els.cvDot.classList.add('warn'); els.cvLabel.textContent = 'OpenCV: 取得済み (初期化待ち)'; }
+      }
+    }, 300);
+
+    // --- Camera start ---
+    els.btnStartCam.addEventListener('click', async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false
+        });
+        els.video.srcObject = stream;
+        await els.video.play();
+        fitOverlayToVideo();
+        cap = new cv.VideoCapture(els.video);
+        streaming = true;
+        loopVision();
+      } catch (e) {
+        alert('カメラにアクセスできませんでした: ' + e.message);
+      }
+    });
+
+    // --- Sensors permission ---
+    els.btnSensors.addEventListener('click', async () => {
+      try {
+        // iOS permission pattern
+        if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+          const st = await DeviceMotionEvent.requestPermission();
+          if (st !== 'granted') throw new Error('DeviceMotion 許可が必要です');
+        }
+        if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
+          await DeviceOrientationEvent.requestPermission();
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+      // listeners
+      window.addEventListener('devicemotion', onMotion, { passive: true });
+      window.addEventListener('deviceorientation', onOrient, { passive: true });
+      els.btnSensors.textContent = '✅ センサー許可済み';
+    });
+
+    // --- Zero / Pause ---
+    els.btnZero.addEventListener('click', () => {
+      visionSum = {x:0,y:0};
+      visionDxDy = {dx:0,dy:0};
+      gravity = {x:0,y:0,z:9.81};
+      linAcc = {x:0,y:0,z:0};
+      vel = {x:0,y:0,z:0};
+      pos = {x:0,y:0,z:0};
+      traj = { imu:[], vision:[], fused:[] };
+      clearTraj();
+    });
+    els.btnPause.addEventListener('click', () => { paused = !paused; els.btnPause.textContent = paused ? '▶ 解析再開' : '⏸ 解析停止'; });
+
+    // --- Vision loop (OpenCV) ---
+    const overlayCtx = els.overlay.getContext('2d');
+    const PROC_W = 640, PROC_H = 360; // downscale for speed
+    let frameCount = 0;
+
+    function loopVision(){
+      if(!streaming) return;
+      requestAnimationFrame(loopVision);
+      if(!opencvReady || paused) return;
+
+      try {
+        // Read frame
+        const src = new cv.Mat(els.video.videoHeight, els.video.videoWidth, cv.CV_8UC4);
+        cap.read(src);
+        const frame = new cv.Mat();
+        cv.resize(src, frame, new cv.Size(PROC_W, PROC_H));
+        const gray = new cv.Mat();
+        cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
+
+        // Init or refresh features periodically
+        const needInit = !prevPts || prevPts.rows < 80 || (frameCount++ % 25 === 0);
+        if(needInit){
+          if(prevPts) prevPts.delete();
+          if(prevGray) prevGray.delete();
+          prevPts = new cv.Mat();
+          const mask = new cv.Mat();
+          cv.goodFeaturesToTrack(gray, prevPts, 250, 0.01, 10, mask, 3, false, 0.04);
+          mask.delete();
+          prevGray = gray.clone();
+          src.delete(); frame.delete(); gray.delete();
+          drawOverlay([]);
+          return;
+        }
+
+        // Track with LK optical flow
+        const nextPts = new cv.Mat();
+        const status = new cv.Mat();
+        const err = new cv.Mat();
+        const winSize = new cv.Size(21,21);
+        cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, winSize, 3,
+          new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 20, 0.03), 0, 1e-4);
+
+        const dxs = [], dys = [], lines = [];
+        const pdat = prevPts.data32F, ndat = nextPts.data32F, sdat = status.data;
+        for(let i=0, k=0; i<sdat.length; i++){
+          if(sdat[i]){
+            const x0 = pdat[i*2], y0 = pdat[i*2+1];
+            const x1 = ndat[i*2], y1 = ndat[i*2+1];
+            dxs.push(x1-x0); dys.push(y1-y0);
+            if(k++ < 200) lines.push([x0,y0,x1,y1]);
+          }
+        }
+        const mdx = median(dxs), mdy = median(dys);
+        visionDxDy = {dx: mdx, dy: mdy};
+        visionSum.x += mdx; visionSum.y += mdy;
+
+        // Prepare next
+        prevGray.delete(); prevGray = gray.clone();
+        prevPts.delete(); prevPts = nextPts.clone();
+
+        // Cleanup
+        src.delete(); frame.delete(); gray.delete(); nextPts.delete(); status.delete(); err.delete();
+
+        drawOverlay(lines);
+        updateTelemetry();
+      } catch (e) {
+        console.warn('Vision loop error:', e);
+      }
+    }
+
+    function drawOverlay(lines){
+      const ctx = overlayCtx;
+      els.overlay.width = PROC_W; els.overlay.height = PROC_H;
+      ctx.clearRect(0,0,els.overlay.width, els.overlay.height);
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      for(const [x0,y0,x1,y1] of lines){
+        ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+      }
+      // Draw median vector
+      ctx.strokeStyle = '#6da7ff';
+      ctx.beginPath();
+      ctx.moveTo(PROC_W-80, PROC_H-40);
+      ctx.lineTo(PROC_W-80 + visionDxDy.dx*4, PROC_H-40 + visionDxDy.dy*4);
+      ctx.stroke();
+    }
+
+    // --- IMU handlers ---
+    function onMotion(e){
+      const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
+      const ts = e.timeStamp || performance.now();
+      const dt = lastIMUts ? Math.min((ts - lastIMUts)/1000, 0.05) : 0; // cap dt
+      lastIMUts = ts;
+      // Gravity low-pass
+      const beta = +els.betaGravity.value; // 0.8..0.999
+      gravity.x = beta*gravity.x + (1-beta)*(a.x||0);
+      gravity.y = beta*gravity.y + (1-beta)*(a.y||0);
+      gravity.z = beta*gravity.z + (1-beta)*(a.z||0);
+      // Linear acc
+      linAcc.x = (a.x||0) - gravity.x;
+      linAcc.y = (a.y||0) - gravity.y;
+      linAcc.z = (a.z||0) - gravity.z;
+      // Integrate (VERY naive; stays in device frame!)
+      if(dt>0){
+        vel.x += linAcc.x * dt; vel.y += linAcc.y * dt; // ignore z for 2D
+        const damp = +els.velDamping.value; vel.x *= damp; vel.y *= damp;
+        pos.x += vel.x * dt; pos.y += vel.y * dt;
+      }
+    }
+
+    function onOrient(e){
+      rpy = { yaw: e.alpha||0, pitch: e.beta||0, roll: e.gamma||0 };
+    }
+
+    // --- Telemetry + Fusion ---
+    function updateTelemetry(){
+      // Vision values (px)
+      els.textVisionDxDy.textContent = `dx=${visionDxDy.dx.toFixed(2)}, dy=${visionDxDy.dy.toFixed(2)} px`;
+      els.textVisionSum.textContent  = `x=${visionSum.x.toFixed(1)}, y=${visionSum.y.toFixed(1)} px`;
+      // IMU
+      els.textImuV.textContent = `vx=${vel.x.toFixed(3)}, vy=${vel.y.toFixed(3)} m/s`;
+      els.textImuP.textContent = `x=${pos.x.toFixed(3)}, y=${pos.y.toFixed(3)} m`;
+      // RPY
+      els.textRPY.textContent = `yaw=${rpy.yaw.toFixed(1)}°, pitch=${rpy.pitch.toFixed(1)}°, roll=${rpy.roll.toFixed(1)}°`;
+
+      // Fusion: weighted blend between IMU position and (Vision px * scale)
+      const s = +els.scaleVision.value;
+      const alpha = +els.alphaFusion.value; // weight on IMU
+      const visionM = { x: visionSum.x * s, y: visionSum.y * s };
+      const fused = { x: alpha*pos.x + (1-alpha)*visionM.x, y: alpha*pos.y + (1-alpha)*visionM.y };
+      els.textFusedP.textContent = `x=${fused.x.toFixed(3)}, y=${fused.y.toFixed(3)} m`;
+
+      // Draw paths
+      pushPt(traj.vision, visionM.x, visionM.y);
+      pushPt(traj.imu, pos.x, pos.y);
+      pushPt(traj.fused, fused.x, fused.y);
+      drawPath();
+    }
+
+    // Resize handling
+    window.addEventListener('resize', () => { fitOverlayToVideo(); drawPath(); });
+  </script>
+</body>
+</html>
