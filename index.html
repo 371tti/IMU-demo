@@ -1,107 +1,459 @@
-<!doctype html>
-<html lang="ja"><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IMU Minimal on GitHub Pages</title>
-<style>
-  body{font-family:system-ui,"Noto Sans JP",sans-serif;margin:20px;line-height:1.6}
-  .row{margin:10px 0}
-  code{display:inline-block;min-width:240px;background:#f5f5f7;padding:4px 8px;border-radius:6px}
-  .ok{color:#0a7} .warn{color:#c80} .bad{color:#d33}
-  button{padding:10px 14px;border-radius:10px;border:1px solid #ccc;background:#fff}
-</style>
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sensor Fusion Tracker — AR/VIO Demo</title>
+  <style>
+    :root{
+      --bg1:#0b1020; --bg2:#0a0f24; --card:#101a34; --ink:#eaf0ff; --muted:#a6b3d9;
+      --accent:#6aa8ff; --good:#2ecc71; --warn:#ffbf47; --bad:#ff6b6b; --grid:rgba(255,255,255,0.08);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;background:radial-gradient(1200px 700px at 70% -10%, #1b2450 0%, #0b1020 40%, #070b18 100%), linear-gradient(180deg,var(--bg1),var(--bg2));color:var(--ink);font-family: system-ui,-apple-system, Segoe UI, Roboto, "Noto Sans JP", sans-serif}
+    header{max-width:1200px;margin:20px auto 10px;padding:0 16px}
+    h1{margin:0 0 6px;font-size:clamp(20px,3.5vw,30px);letter-spacing:.2px}
+    .subtitle{color:var(--muted);font-size:14px}
+    .wrap{max-width:1200px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1.15fr .85fr}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); border:1px solid rgba(255,255,255,.10); border-radius:16px; padding:14px; box-shadow: 0 10px 30px rgba(0,0,0,.35)}
+    .grid{display:grid;gap:12px}
+    .panel{display:grid;grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; align-items:end}
+    button{background:var(--card);border:1px solid rgba(255,255,255,0.15);color:var(--ink);padding:10px 12px;border-radius:12px;cursor:pointer;font-weight:700}
+    button:hover{border-color:var(--accent)}
+    .chip{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);font-size:12px;color:var(--muted);margin-right:6px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#888}
+    .ok{background:var(--good)} .warn{background:var(--warn)} .bad{background:var(--bad)}
+    .statusRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+    video, canvas.viewer{width:100%;height:auto;border-radius:12px;background:#000;display:block}
+    .kv{display:grid;grid-template-columns: 1fr 1fr; gap:8px 10px; font-size:13px; color:var(--muted)}
+    .kv div{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06);padding:8px 10px;border-radius:10px}
+    .kv b{color:var(--ink)}
+    .slider{display:grid;grid-template-columns: 120px 1fr auto;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+    .slider input[type=range]{width:100%}
+    .note{font-size:12px;color:var(--muted);line-height:1.6}
+    .map{width:100%;height:380px;border-radius:12px;background:
+      linear-gradient(0deg, transparent 49px, var(--grid) 50px), linear-gradient(90deg, transparent 49px, var(--grid) 50px), linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.01));
+      background-size:50px 50px; border:1px solid rgba(255,255,255,.12); position:relative; overflow:hidden}
+    .legend{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--muted)}
+    .key{display:inline-flex;align-items:center;gap:6px}
+    .swatch{width:14px;height:3px;background:#6aa8ff;border-radius:2px;display:inline-block}
+    .swImu{background:#2ecc71} .swVision{background:#ffbf47}
+    .hud{position:absolute; top:10px; right:10px; background:rgba(0,0,0,.35); border:1px solid rgba(255,255,255,.15); padding:8px 10px; border-radius:10px; font-size:12px}
+    .warnbox{border-left:3px solid var(--warn); background:rgba(255, 191, 71, .08); padding:10px;border-radius:8px}
+    @media (max-width: 920px){ .wrap{grid-template-columns:1fr} .panel{grid-template-columns:1fr 1fr} }
+  </style>
+  <!-- OpenCV.js for optical flow fallback -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
 <body>
-<h2>センサー確認デモ（GitHub Pages 用）</h2>
+  <header>
+    <h1>Sensor Fusion Tracker — カメラ × ジャイロ × 加速度 × GPS（マーカーなし）</h1>
+    <div class="subtitle">WebXR対応端末ではARの“ローカルm座標”を利用、他ではOpenCV光学フロー＋IMUで相対移動を推定。<br>GPSと方位で簡易ENUに載せて“だいたいの絶対座標”も表示します（デモ用）。</div>
+  </header>
 
-<div class="row">状態: <span id="state">init...</span></div>
-<div class="row"><button id="perm">📡 センサー許可</button></div>
+  <main class="wrap">
+    <!-- Left: Viewer (camera/WebXR) -->
+    <section class="card grid">
+      <div class="panel">
+        <button id="btnStart">📷 カメラ＋センサー開始</button>
+        <button id="btnXR">🪄 WebXR AR（β）</button>
+        <button id="btnReset">原点リセット</button>
+      </div>
+      <div class="statusRow">
+        <span class="chip"><span class="dot" id="stHttps"></span>HTTPS</span>
+        <span class="chip"><span class="dot" id="stCam"></span>Camera</span>
+        <span class="chip"><span class="dot" id="stIMU"></span>IMU</span>
+        <span class="chip"><span class="dot" id="stGeo"></span>GPS</span>
+        <span class="chip"><span class="dot" id="stCV"></span>OpenCV</span>
+        <span class="chip"><span class="dot" id="stXR"></span>WebXR</span>
+      </div>
 
-<div class="row"><b>DeviceMotion:</b> <code id="dm">待機中</code></div>
-<div class="row"><b>Orientation:</b> <code id="do">待機中</code></div>
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay" class="viewer"></canvas>
+      <div class="hud" id="hud">準備中...</div>
+    </section>
 
-<div class="row"><b>Generic Sensor API (Accel):</b> <code id="ga">未使用</code></div>
-<div class="row"><b>Generic Sensor API (Gyro):</b> <code id="gg">未使用</code></div>
+    <!-- Right: Controls & Telemetry -->
+    <section class="card grid">
+      <div class="legend">
+        <span class="key"><span class="swatch"></span> Fused</span>
+        <span class="key"><span class="swatch swImu"></span> IMU</span>
+        <span class="key"><span class="swatch swVision"></span> Vision</span>
+      </div>
+      <canvas id="traj" class="map" width="520" height="380"></canvas>
 
-<script>
-const $ = (id)=>document.getElementById(id);
-const secure = window.isSecureContext;
-const hasDM = 'DeviceMotionEvent' in window;
-const hasDO = 'DeviceOrientationEvent' in window;
-const hasGS = 'Accelerometer' in window || 'Gyroscope' in window;
+      <div class="kv">
+        <div><b>ローカル姿勢</b><br><span id="pose">x=0, y=0, z=0 m / yaw=0°</span></div>
+        <div><b>速度(概算)</b><br><span id="vel">vx=0, vy=0 m/s</span></div>
+        <div><b>絶対座標(推定)</b><br><span id="geoEst">lat=—, lon=—</span></div>
+        <div><b>GPS(生)</b><br><span id="geoRaw">—</span></div>
+        <div><b>WebXR</b><br><span id="xrInfo">未使用</span></div>
+        <div><b>メッセージ</b><br><span id="msg">—</span></div>
+      </div>
 
-function setState(msg, cls=''){ const el=$('state'); el.textContent=msg; el.className=cls; }
-function fmt(n){ return (n==null?0:n).toFixed(3); }
+      <div class="grid">
+        <div class="slider">
+          <label>Vision scale (m/px)</label>
+          <input id="scaleVision" type="range" min="0" max="0.05" step="0.0005" value="0.005" />
+          <code id="scaleVisionVal">0.005</code>
+        </div>
+        <div class="slider">
+          <label>Fusion α (IMU↔Vision)</label>
+          <input id="alphaFusion" type="range" min="0" max="1" step="0.02" value="0.7" />
+          <code id="alphaFusionVal">0.70</code>
+        </div>
+        <div class="slider">
+          <label>IMU 速度減衰</label>
+          <input id="velDamping" type="range" min="0.85" max="0.999" step="0.001" value="0.97" />
+          <code id="velDampingVal">0.970</code>
+        </div>
+        <div class="slider">
+          <label>重力LPF(β)</label>
+          <input id="betaGravity" type="range" min="0.8" max="0.999" step="0.001" value="0.98" />
+          <code id="betaGravityVal">0.980</code>
+        </div>
+        <div class="panel" style="grid-template-columns:repeat(2,minmax(0,1fr));">
+          <button id="btnCalibNorth">北合わせ（簡易）</button>
+          <button id="btnSetOrigin">原点=現在位置</button>
+        </div>
+      </div>
 
-setState(`secure=${secure} / DM=${hasDM} / DO=${hasDO} / GS=${hasGS}`, secure?'ok':'bad');
+      <p class="note">
+        ⚠️ デモ用途です。WebXR未対応端末は OpenCV 光学フロー＋IMU の簡易VIO。<br>
+        GPSはm級、ローカル座標（AR/VIO）はcm〜十数cm級の安定が期待できますが、環境に依存します。<br>
+        明るい場所／模様の多いテクスチャで安定。WebXRは Chrome Android 推奨。
+      </p>
+      <div class="warnbox note">
+        マーカーを使わず cm 級の“絶対”は困難です。ここでは「ローカルm座標」を ENU に重ね、GPSで粗く拘束する方式です。
+      </div>
+    </section>
+  </main>
 
-let dmCount=0, doCount=0, gaCount=0, ggCount=0;
+  <script>
+    // ---------- DOM refs ----------
+    const els = {
+      video: document.getElementById('video'),
+      overlay: document.getElementById('overlay'),
+      hud: document.getElementById('hud'),
+      traj: document.getElementById('traj'),
+      btnStart: document.getElementById('btnStart'),
+      btnXR: document.getElementById('btnXR'),
+      btnReset: document.getElementById('btnReset'),
+      btnCalibNorth: document.getElementById('btnCalibNorth'),
+      btnSetOrigin: document.getElementById('btnSetOrigin'),
+      stHttps: document.getElementById('stHttps'),
+      stCam: document.getElementById('stCam'),
+      stIMU: document.getElementById('stIMU'),
+      stGeo: document.getElementById('stGeo'),
+      stCV: document.getElementById('stCV'),
+      stXR: document.getElementById('stXR'),
+      scaleVision: document.getElementById('scaleVision'),
+      alphaFusion: document.getElementById('alphaFusion'),
+      velDamping: document.getElementById('velDamping'),
+      betaGravity: document.getElementById('betaGravity'),
+      sScaleVision: document.getElementById('scaleVisionVal'),
+      sAlphaFusion: document.getElementById('alphaFusionVal'),
+      sVelDamp: document.getElementById('velDampingVal'),
+      sBetaGrav: document.getElementById('betaGravityVal'),
+      pose: document.getElementById('pose'),
+      vel: document.getElementById('vel'),
+      geoEst: document.getElementById('geoEst'),
+      geoRaw: document.getElementById('geoRaw'),
+      xrInfo: document.getElementById('xrInfo'),
+      msg: document.getElementById('msg'),
+    };
 
-function attachLegacy(){
-  // DeviceMotion / DeviceOrientation
-  window.addEventListener('devicemotion', e=>{
-    dmCount++;
-    const a = e.accelerationIncludingGravity || e.acceleration || {};
-    $('dm').textContent = `#${dmCount} ax=${fmt(a.x)} ay=${fmt(a.y)} az=${fmt(a.z)}`;
-  }, {passive:true});
-  window.addEventListener('deviceorientation', e=>{
-    doCount++;
-    $('do').textContent = `#${doCount} yaw=${fmt(e.alpha)} pitch=${fmt(e.beta)} roll=${fmt(e.gamma)}`;
-  }, {passive:true});
-}
+    // ---------- Utils ----------
+    const fmt = (n, d=3)=> (n==null||!isFinite(n)) ? '—' : (+n).toFixed(d);
+    const setDot = (el, ok, warn=false)=>{
+      el.classList.remove('ok','warn','bad');
+      el.classList.add(ok ? 'ok' : (warn ? 'warn' : 'bad'));
+    };
+    const showRanges = ()=>{
+      els.sScaleVision.textContent = (+els.scaleVision.value).toFixed(3);
+      els.sAlphaFusion.textContent = (+els.alphaFusion.value).toFixed(2);
+      els.sVelDamp.textContent = (+els.velDamping.value).toFixed(3);
+      els.sBetaGrav.textContent = (+els.betaGravity.value).toFixed(3);
+    };
+    ['input','change'].forEach(ev=>{
+      els.scaleVision.addEventListener(ev, showRanges);
+      els.alphaFusion.addEventListener(ev, showRanges);
+      els.velDamping.addEventListener(ev, showRanges);
+      els.betaGravity.addEventListener(ev, showRanges);
+    });
+    showRanges();
 
-async function attachGeneric(){
-  try{
-    if('Accelerometer' in window){
-      const acc = new Accelerometer({frequency:30}); // 30Hz程度
-      acc.addEventListener('reading', ()=>{
-        gaCount++;
-        $('ga').textContent = `#${gaCount} ax=${fmt(acc.x)} ay=${fmt(acc.y)} az=${fmt(acc.z)}`;
-      });
-      acc.start();
-    } else {
-      $('ga').textContent = '未対応';
+    // HTTPS state
+    setDot(els.stHttps, window.isSecureContext || location.hostname === 'localhost');
+
+    // ---------- Global state ----------
+    let cvReady = false, useXR = false, streaming = false, paused = false;
+    let cap = null, prevGray=null, prevPts=null, frameCount=0;
+    let visionSum = {x:0,y:0}, visionDxDy={dx:0,dy:0};
+    let gravity={x:0,y:0,z:9.81}, linAcc={x:0,y:0,z:0}, vel2d={x:0,y:0}, pos2d={x:0,y:0}, lastIMUts=null;
+    let yawDeg = 0, yaw0 = 0; // device yaw and calibration offset
+    let lat0=null, lon0=null, alt0=null, heading0Deg=null; // ENU origin
+    let geoLast=null;
+    let xrSession=null, xrRefSpace=null;
+
+    // Trajectory canvas
+    const map = els.traj.getContext('2d');
+    function clearMap(){
+      map.clearRect(0,0,els.traj.width, els.traj.height);
+      map.fillStyle = 'rgba(0,0,0,.18)';
+      map.fillRect(0,0,els.traj.width, els.traj.height);
+      // grid already via CSS background
     }
-    if('Gyroscope' in window){
-      const gyro = new Gyroscope({frequency:30});
-      gyro.addEventListener('reading', ()=>{
-        ggCount++;
-        $('gg').textContent = `#${ggCount} gx=${fmt(gyro.x)} gy=${fmt(gyro.y)} gz=${fmt(gyro.z)}`;
-      });
-      gyro.start();
-    } else {
-      $('gg').textContent = '未対応';
+    clearMap();
+    const traj = { imu:[], vision:[], fused:[] };
+    function pushPt(arr, x, y){ arr.push({x,y}); if(arr.length>1200) arr.shift(); }
+    function drawTraj(){
+      clearMap();
+      const cx = els.traj.width/2, cy = els.traj.height/2, k=12;
+      const draw = (points, col, w)=>{
+        if(points.length<2) return;
+        map.beginPath();
+        map.moveTo(cx + points[0].x*k, cy - points[0].y*k);
+        for(let i=1;i<points.length;i++) map.lineTo(cx + points[i].x*k, cy - points[i].y*k);
+        map.strokeStyle = col; map.lineWidth = w; map.stroke();
+      };
+      draw(traj.vision, '#ffbf47', 1.5);
+      draw(traj.imu, '#2ecc71', 1.5);
+      draw(traj.fused, '#6aa8ff', 2.5);
     }
-  }catch(e){
-    $('ga').textContent = 'エラー: '+e.message;
-    $('gg').textContent = 'エラー: '+e.message;
-  }
-}
 
-$('perm').onclick = async ()=>{
-  // iOS の requestPermission（タップ起点が必須）
-  try{
-    if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
-      const st = await DeviceMotionEvent.requestPermission();
-      if(st !== 'granted') throw new Error('DeviceMotion 拒否');
+    // ---------- OpenCV ----------
+    window.Module = { onRuntimeInitialized(){ cvReady=true; setDot(els.stCV,true); } };
+    const cvCheck = setInterval(()=>{
+      if(typeof cv!=='undefined' && cv.Mat){ clearInterval(cvCheck); /* wait for onRuntimeInitialized */ }
+    }, 300);
+
+    // ---------- Camera start ----------
+    async function startCamera(){
+      try{
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: {ideal:'environment'}, width:{ideal:1280}, height:{ideal:720} },
+          audio: false
+        });
+        els.video.srcObject = stream; await els.video.play();
+        cap = new cv.VideoCapture(els.video);
+        setDot(els.stCam,true);
+        streaming = true;
+        loopVision();
+      }catch(e){
+        setDot(els.stCam,false);
+        els.msg.textContent = 'カメラNG: '+e.message;
+      }
     }
-    if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
-      await DeviceOrientationEvent.requestPermission().catch(()=>{});
+
+    // ---------- Vision loop (optical flow) ----------
+    const overlay = els.overlay.getContext('2d');
+    const PROC_W=640, PROC_H=360;
+    function loopVision(){
+      if(!streaming || useXR) return;
+      requestAnimationFrame(loopVision);
+      if(!cvReady) return;
+      try{
+        const src = new cv.Mat(els.video.videoHeight||720, els.video.videoWidth||1280, cv.CV_8UC4);
+        cap.read(src);
+        const frame = new cv.Mat(); cv.resize(src, frame, new cv.Size(PROC_W, PROC_H));
+        const gray = new cv.Mat(); cv.cvtColor(frame, gray, cv.COLOR_RGBA2GRAY);
+
+        const needInit = !prevPts || prevPts.rows<80 || (frameCount++%25===0);
+        if(needInit){
+          if(prevPts) prevPts.delete(); if(prevGray) prevGray.delete();
+          prevPts = new cv.Mat(); const mask = new cv.Mat();
+          cv.goodFeaturesToTrack(gray, prevPts, 250, 0.01, 10, mask, 3, false, 0.04);
+          mask.delete(); prevGray = gray.clone();
+          src.delete(); frame.delete(); gray.delete();
+          drawOverlay([]); return;
+        }
+
+        const nextPts = new cv.Mat(), status=new cv.Mat(), err=new cv.Mat();
+        cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, new cv.Size(21,21), 3,
+          new cv.TermCriteria(cv.TERM_CRITERIA_EPS|cv.TERM_CRITERIA_COUNT, 20, 0.03), 0, 1e-4);
+
+        const dx=[], dy=[], lines=[]; const p=prevPts.data32F, n=nextPts.data32F, s=status.data;
+        for(let i=0,k=0;i<s.length;i++){ if(s[i]){ const x0=p[i*2],y0=p[i*2+1], x1=n[i*2],y1=n[i*2+1];
+          dx.push(x1-x0); dy.push(y1-y0); if(k++<160) lines.push([x0,y0,x1,y1]); } }
+        const mdx = median(dx), mdy = median(dy);
+        visionDxDy = {dx:mdx,dy:mdy}; visionSum.x += mdx; visionSum.y += mdy;
+
+        prevGray.delete(); prevGray = gray.clone(); prevPts.delete(); prevPts = nextPts.clone();
+        src.delete(); frame.delete(); gray.delete(); nextPts.delete(); status.delete(); err.delete();
+        drawOverlay(lines);
+      }catch(e){ els.msg.textContent = 'Vision err: '+e.message; }
     }
-  }catch(e){
-    setState('iOS 権限が拒否されました: '+e.message, 'bad');
-  }
+    function drawOverlay(lines){
+      overlay.canvas.width = PROC_W; overlay.canvas.height = PROC_H;
+      overlay.clearRect(0,0,overlay.canvas.width, overlay.canvas.height);
+      overlay.globalAlpha=.9; overlay.lineWidth=1.4; overlay.strokeStyle='rgba(255,255,255,0.75)';
+      for(const [x0,y0,x1,y1] of lines){ overlay.beginPath(); overlay.moveTo(x0,y0); overlay.lineTo(x1,y1); overlay.stroke(); }
+      // median vector
+      overlay.strokeStyle='#6aa8ff'; overlay.beginPath(); overlay.moveTo(PROC_W-80,PROC_H-40);
+      overlay.lineTo(PROC_W-80 + visionDxDy.dx*4, PROC_H-40 + visionDxDy.dy*4); overlay.stroke();
+    }
+    const median = arr => { if(!arr.length) return 0; const a = arr.slice().sort((a,b)=>a-b); const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; };
 
-  // 旧API (Safari/Chrome端末依存)
-  if(hasDM || hasDO) attachLegacy();
+    // ---------- IMU ----------
+    function attachIMU(){
+      // iOS permission
+      (async()=>{
+        try{
+          if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission==='function'){
+            const st = await DeviceMotionEvent.requestPermission(); if(st!=='granted') throw new Error('DeviceMotion 拒否');
+          }
+          if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission==='function'){
+            await DeviceOrientationEvent.requestPermission().catch(()=>{});
+          }
+        }catch(e){ /* ignore; some platforms don't need this */ }
+      })();
 
-  // Generic Sensor API（Android Chrome で動くことが多い / iOS Safariは未対応）
-  if(hasGS) attachGeneric();
+      window.addEventListener('devicemotion', e=>{
+        setDot(els.stIMU,true);
+        const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
+        const ts = e.timeStamp || performance.now();
+        const dt = lastIMUts ? Math.min((ts-lastIMUts)/1000, 0.05) : 0; lastIMUts = ts;
+        const beta = +els.betaGravity.value;
+        gravity.x = beta*gravity.x + (1-beta)*(a.x||0);
+        gravity.y = beta*gravity.y + (1-beta)*(a.y||0);
+        gravity.z = beta*gravity.z + (1-beta)*(a.z||0);
+        linAcc.x = (a.x||0) - gravity.x;
+        linAcc.y = (a.y||0) - gravity.y;
+        if(dt>0){
+          vel2d.x += linAcc.x*dt; vel2d.y += linAcc.y*dt;
+          const damp = +els.velDamping.value; vel2d.x*=damp; vel2d.y*=damp;
+          pos2d.x += vel2d.x*dt; pos2d.y += vel2d.y*dt;
+        }
+      }, {passive:true});
 
-  setState('リスナー登録完了：端末を少し動かしてみてください', 'ok');
-};
+      window.addEventListener('deviceorientation', e=>{
+        // yaw: 0..360 deg
+        yawDeg = (e.alpha || 0);
+      }, {passive:true});
+    }
 
-// 初期チェック
-if(!secure){
-  setState('非HTTPSなのでセンサーがブロックされます（GitHub PagesはHTTPSなので、この表示が出てたら別の経路で開いている可能性）', 'bad');
-}
-</script>
+    // ---------- GPS ----------
+    function startGPS(){
+      if(!navigator.geolocation){ setDot(els.stGeo,false); return; }
+      const opts = { enableHighAccuracy:true, maximumAge:1000, timeout:10000 };
+      navigator.geolocation.watchPosition(pos=>{
+        setDot(els.stGeo,true);
+        geoLast = pos;
+        const { latitude, longitude, accuracy, altitude } = pos.coords;
+        els.geoRaw.textContent = `lat=${fmt(latitude,6)}, lon=${fmt(longitude,6)}, acc≈${fmt(accuracy,1)}m`;
+        if(lat0===null || lon0===null){ /* keep origin unset until user presses Set Origin */ }
+      }, err=>{
+        setDot(els.stGeo,false);
+        els.geoRaw.textContent = 'GPS error: '+err.message;
+      }, opts);
+    }
+
+    // ---------- ENU helpers ----------
+    const R_EARTH = 6378137.0;
+    function enuToLatLon(east, north){
+      if(lat0==null || lon0==null) return {lat:null, lon:null};
+      const dLat = north / R_EARTH;
+      const dLon = east / (R_EARTH * Math.cos(lat0*Math.PI/180));
+      return { lat: lat0 + (dLat*180/Math.PI), lon: lon0 + (dLon*180/Math.PI) };
+    }
+
+    // ---------- Fusion & UI tick ----------
+    const hudTick = ()=>{
+      const s = +els.scaleVision.value, alpha = +els.alphaFusion.value;
+      // rotate device frame (x right, y up-ish) into ENU using yaw calibration
+      const theta = ((yawDeg - yaw0) * Math.PI/180); // rad
+      const R = { c: Math.cos(theta), s: Math.sin(theta) };
+      const imuPosENU = { x: R.c*pos2d.x - R.s*pos2d.y, y: R.s*pos2d.x + R.c*pos2d.y };
+      const visionM = { x: visionSum.x*s, y: -visionSum.y*s }; // y反転（画座標）
+      const visionENU = { x: R.c*visionM.x - R.s*visionM.y, y: R.s*visionM.x + R.c*visionM.y };
+      const fused = { x: alpha*imuPosENU.x + (1-alpha)*visionENU.x, y: alpha*imuPosENU.y + (1-alpha)*visionENU.y };
+
+      els.pose.textContent = `x=${fmt(fused.x)}, y=${fmt(fused.y)}, z=${fmt(0)}, yaw=${fmt(yawDeg,1)}°`;
+      els.vel.textContent = `vx=${fmt(vel2d.x)}, vy=${fmt(vel2d.y)} m/s`;
+
+      // absolute estimate
+      const geo = enuToLatLon(fused.x, fused.y);
+      els.geoEst.textContent = (geo.lat==null) ? 'lat=—, lon=—' : `lat=${fmt(geo.lat,6)}, lon=${fmt(geo.lon,6)}`;
+
+      pushPt(traj.vision, visionENU.x, visionENU.y);
+      pushPt(traj.imu, imuPosENU.x, imuPosENU.y);
+      pushPt(traj.fused, fused.x, fused.y);
+      drawTraj();
+
+      // HUD
+      els.hud.textContent = `Vision dx=${fmt(visionDxDy.dx,2)} dy=${fmt(visionDxDy.dy,2)} px  |  yaw=${fmt(yawDeg,1)}°`;
+      requestAnimationFrame(hudTick);
+    };
+
+    // ---------- WebXR (optional) ----------
+    async function startXR(){
+      if(!navigator.xr){ setDot(els.stXR,false); els.xrInfo.textContent='WebXR未対応'; return; }
+      try{
+        const supported = await navigator.xr.isSessionSupported('immersive-ar');
+        if(!supported){ setDot(els.stXR,false, true); els.xrInfo.textContent='ARセッション非対応（Chrome Android推奨）'; return; }
+
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl', { xrCompatible:true });
+        xrSession = await navigator.xr.requestSession('immersive-ar', { requiredFeatures:['local-floor'] });
+        xrSession.updateRenderState({ baseLayer: new XRWebGLLayer(xrSession, gl) });
+        xrRefSpace = await xrSession.requestReferenceSpace('local-floor');
+        setDot(els.stXR,true); useXR = true;
+
+        function onXR(t, frame){
+          xrSession.requestAnimationFrame(onXR);
+          const pose = frame.getViewerPose(xrRefSpace);
+          if(!pose) return;
+          const tf = pose.views[0].transform;
+          // WebXRのローカル座標（m）。zは前後。ここでは x,z を平面とみなす。
+          const x = tf.position.x, z = tf.position.z;
+          // 端末yawは orientation から近似（ここではDeviceOrientationを継続使用）
+          // 視覚のみのm座標としてvisionSum相当を上書き
+          // ここでは簡略化：WebXRを使う場合は visionSum をリセットし、x,z を fused に直接用いる。
+          visionSum.x = x * (1/ ( +els.scaleVision.value || 1 )); // scale逆適用で px換算に見せかける
+          visionSum.y = -z * (1/ ( +els.scaleVision.value || 1 ));
+        }
+        xrSession.requestAnimationFrame(onXR);
+      }catch(e){
+        setDot(els.stXR,false);
+        els.xrInfo.textContent = 'XR err: '+e.message;
+      }
+    }
+
+    // ---------- Controls ----------
+    els.btnStart.addEventListener('click', async ()=>{
+      // Camera + IMU + GPS
+      await startCamera();
+      attachIMU();
+      startGPS();
+      requestAnimationFrame(hudTick);
+    });
+    els.btnXR.addEventListener('click', startXR);
+    els.btnReset.addEventListener('click', ()=>{
+      visionSum={x:0,y:0}; visionDxDy={dx:0,dy:0}; gravity={x:0,y:0,z:9.81};
+      linAcc={x:0,y:0,z:0}; vel2d={x:0,y:0}; pos2d={x:0,y:0}; yaw0=yawDeg;
+      traj.imu.length=0; traj.vision.length=0; traj.fused.length=0;
+      drawTraj();
+    });
+    els.btnCalibNorth.addEventListener('click', ()=>{ yaw0 = yawDeg; });
+    els.btnSetOrigin.addEventListener('click', ()=>{
+      if(geoLast){ const { latitude, longitude, altitude } = geoLast.coords;
+        lat0=latitude; lon0=longitude; alt0=altitude||0;
+        els.msg.textContent = `原点を lat=${fmt(lat0,6)}, lon=${fmt(lon0,6)} に設定`;
+      } else {
+        els.msg.textContent = 'GPS未取得。屋外でしばらく待ってから再試行。';
+      }
+    });
+
+    // Fit overlay to video size
+    function fitOverlay(){
+      if(!els.video.videoWidth) return;
+      els.overlay.width = els.video.videoWidth;
+      els.overlay.height = els.video.videoHeight;
+    }
+    window.addEventListener('resize', fitOverlay);
+    els.video.addEventListener('loadedmetadata', fitOverlay);
+  </script>
 </body>
+</html>
