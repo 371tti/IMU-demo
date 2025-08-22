@@ -1,50 +1,107 @@
 <!doctype html>
 <html lang="ja"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Camera + IMU Minimal</title>
+<title>IMU Minimal on GitHub Pages</title>
 <style>
-  body{font-family:system-ui, "Noto Sans JP", sans-serif; margin:20px;}
-  video{width:100%;max-width:520px;background:#000;border-radius:8px}
-  .row{margin:8px 0}
-  code{display:inline-block;min-width:120px}
+  body{font-family:system-ui,"Noto Sans JP",sans-serif;margin:20px;line-height:1.6}
+  .row{margin:10px 0}
+  code{display:inline-block;min-width:240px;background:#f5f5f7;padding:4px 8px;border-radius:6px}
+  .ok{color:#0a7} .warn{color:#c80} .bad{color:#d33}
+  button{padding:10px 14px;border-radius:10px;border:1px solid #ccc;background:#fff}
 </style>
 <body>
-<h2>最小デモ（カメラ＆IMU）</h2>
-<div class="row"><button id="cam">📷 カメラ開始</button> <button id="imu">📡 センサー許可</button></div>
-<video id="v" playsinline muted></video>
-<div class="row"><b>acc:</b> <code id="acc">x=0 y=0 z=0</code></div>
-<div class="row"><b>ori:</b> <code id="ori">yaw=0 pitch=0 roll=0</code></div>
-<script>
-const v = document.getElementById('v');
-document.getElementById('cam').onclick = async () => {
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: {ideal:'environment'} }, audio:false
-    });
-    v.srcObject = s; await v.play();
-  } catch(e){ alert('カメラNG: '+e.message); }
-};
+<h2>センサー確認デモ（GitHub Pages 用）</h2>
 
-document.getElementById('imu').onclick = async () => {
-  try {
+<div class="row">状態: <span id="state">init...</span></div>
+<div class="row"><button id="perm">📡 センサー許可</button></div>
+
+<div class="row"><b>DeviceMotion:</b> <code id="dm">待機中</code></div>
+<div class="row"><b>Orientation:</b> <code id="do">待機中</code></div>
+
+<div class="row"><b>Generic Sensor API (Accel):</b> <code id="ga">未使用</code></div>
+<div class="row"><b>Generic Sensor API (Gyro):</b> <code id="gg">未使用</code></div>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+const secure = window.isSecureContext;
+const hasDM = 'DeviceMotionEvent' in window;
+const hasDO = 'DeviceOrientationEvent' in window;
+const hasGS = 'Accelerometer' in window || 'Gyroscope' in window;
+
+function setState(msg, cls=''){ const el=$('state'); el.textContent=msg; el.className=cls; }
+function fmt(n){ return (n==null?0:n).toFixed(3); }
+
+setState(`secure=${secure} / DM=${hasDM} / DO=${hasDO} / GS=${hasGS}`, secure?'ok':'bad');
+
+let dmCount=0, doCount=0, gaCount=0, ggCount=0;
+
+function attachLegacy(){
+  // DeviceMotion / DeviceOrientation
+  window.addEventListener('devicemotion', e=>{
+    dmCount++;
+    const a = e.accelerationIncludingGravity || e.acceleration || {};
+    $('dm').textContent = `#${dmCount} ax=${fmt(a.x)} ay=${fmt(a.y)} az=${fmt(a.z)}`;
+  }, {passive:true});
+  window.addEventListener('deviceorientation', e=>{
+    doCount++;
+    $('do').textContent = `#${doCount} yaw=${fmt(e.alpha)} pitch=${fmt(e.beta)} roll=${fmt(e.gamma)}`;
+  }, {passive:true});
+}
+
+async function attachGeneric(){
+  try{
+    if('Accelerometer' in window){
+      const acc = new Accelerometer({frequency:30}); // 30Hz程度
+      acc.addEventListener('reading', ()=>{
+        gaCount++;
+        $('ga').textContent = `#${gaCount} ax=${fmt(acc.x)} ay=${fmt(acc.y)} az=${fmt(acc.z)}`;
+      });
+      acc.start();
+    } else {
+      $('ga').textContent = '未対応';
+    }
+    if('Gyroscope' in window){
+      const gyro = new Gyroscope({frequency:30});
+      gyro.addEventListener('reading', ()=>{
+        ggCount++;
+        $('gg').textContent = `#${ggCount} gx=${fmt(gyro.x)} gy=${fmt(gyro.y)} gz=${fmt(gyro.z)}`;
+      });
+      gyro.start();
+    } else {
+      $('gg').textContent = '未対応';
+    }
+  }catch(e){
+    $('ga').textContent = 'エラー: '+e.message;
+    $('gg').textContent = 'エラー: '+e.message;
+  }
+}
+
+$('perm').onclick = async ()=>{
+  // iOS の requestPermission（タップ起点が必須）
+  try{
     if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
-      const st = await DeviceMotionEvent.requestPermission(); if (st!=='granted') throw new Error('DeviceMotion拒否');
+      const st = await DeviceMotionEvent.requestPermission();
+      if(st !== 'granted') throw new Error('DeviceMotion 拒否');
     }
     if (window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function') {
       await DeviceOrientationEvent.requestPermission().catch(()=>{});
     }
-  } catch(e){ alert('センサー許可が必要: '+e.message); }
+  }catch(e){
+    setState('iOS 権限が拒否されました: '+e.message, 'bad');
+  }
 
-  window.addEventListener('devicemotion', e=>{
-    const a = e.accelerationIncludingGravity || e.acceleration || {x:0,y:0,z:0};
-    document.getElementById('acc').textContent =
-      `x=${(a.x||0).toFixed(2)} y=${(a.y||0).toFixed(2)} z=${(a.z||0).toFixed(2)}`;
-  }, {passive:true});
+  // 旧API (Safari/Chrome端末依存)
+  if(hasDM || hasDO) attachLegacy();
 
-  window.addEventListener('deviceorientation', e=>{
-    document.getElementById('ori').textContent =
-      `yaw=${(e.alpha||0).toFixed(1)} pitch=${(e.beta||0).toFixed(1)} roll=${(e.gamma||0).toFixed(1)}`;
-  }, {passive:true});
+  // Generic Sensor API（Android Chrome で動くことが多い / iOS Safariは未対応）
+  if(hasGS) attachGeneric();
+
+  setState('リスナー登録完了：端末を少し動かしてみてください', 'ok');
 };
+
+// 初期チェック
+if(!secure){
+  setState('非HTTPSなのでセンサーがブロックされます（GitHub PagesはHTTPSなので、この表示が出てたら別の経路で開いている可能性）', 'bad');
+}
 </script>
 </body>
